@@ -84,6 +84,7 @@ Fonctionnalites implementees:
 - insertion des messages `system`, `user`, `assistant`,
 - rechargement automatique d'une conversation depuis la liste `Mes conversations` (sans bouton `Charger`).
 - nom des conversations base sur le premier message utilisateur.
+- export de la conversation courante en JSON et CSV.
 
 ## Deploiement Streamlit in Snowflake
 1. Ouvrir Snowflake > **Projects** > **Streamlit** > **Create app**.

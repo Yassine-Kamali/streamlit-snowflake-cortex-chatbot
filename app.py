@@ -1,4 +1,7 @@
 ﻿import json
+import csv
+import io
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 from uuid import uuid4
 
@@ -175,6 +178,25 @@ def trim_history(messages: List[Dict[str, str]], max_turns: int) -> List[Dict[st
     if system_messages:
         return [system_messages[0], *trimmed_dialogue]
     return trimmed_dialogue
+
+
+def conversation_export_payload(messages: List[Dict[str, str]], conversation_id: str, user_name: str) -> str:
+    payload = {
+        "conversation_id": conversation_id,
+        "user_name": user_name,
+        "exported_at_utc": datetime.now(timezone.utc).isoformat(),
+        "messages": messages,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def conversation_to_csv(messages: List[Dict[str, str]]) -> str:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["index", "role", "content"])
+    for idx, message in enumerate(messages, start=1):
+        writer.writerow([idx, message.get("role", ""), message.get("content", "")])
+    return buffer.getvalue()
 
 
 def parse_cortex_response(raw_response: Any) -> str:
@@ -418,6 +440,25 @@ with st.sidebar:
     else:
         st.caption("Aucune conversation enregistree pour cet utilisateur.")
 
+    st.markdown("### Export conversation")
+    export_json = conversation_export_payload(
+        st.session_state.messages, st.session_state.conversation_id, st.session_state.current_user
+    )
+    export_csv = conversation_to_csv(st.session_state.messages)
+    file_prefix = f"conversation_{st.session_state.conversation_id}"
+    st.download_button(
+        "Exporter JSON",
+        data=export_json,
+        file_name=f"{file_prefix}.json",
+        mime="application/json",
+    )
+    st.download_button(
+        "Exporter CSV",
+        data=export_csv,
+        file_name=f"{file_prefix}.csv",
+        mime="text/csv",
+    )
+
 cleaned_prompt = prompt_input.strip() or DEFAULT_SYSTEM_PROMPT
 if cleaned_prompt != st.session_state.system_prompt:
     st.session_state.system_prompt = cleaned_prompt
@@ -456,21 +497,21 @@ if user_prompt:
             st.session_state.table_warning = f"Insertion utilisateur impossible ({exc})."
 
     with st.chat_message("assistant"):
+        payload = trim_history(st.session_state.messages, max_turns)
         with st.spinner("Generation en cours..."):
-            payload = trim_history(st.session_state.messages, max_turns)
             try:
-                answer = call_cortex(session, selected_model, payload, temperature)
+                displayed_answer = call_cortex(session, selected_model, payload, temperature)
             except Exception as exc:  # noqa: BLE001
-                answer = format_cortex_exception(exc, selected_model)
+                displayed_answer = format_cortex_exception(exc, selected_model)
 
-        st.markdown(answer)
+        st.markdown(displayed_answer)
 
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+    st.session_state.messages.append({"role": "assistant", "content": displayed_answer})
 
     if not st.session_state.table_warning:
         try:
             insert_message(
-                session, st.session_state.conversation_id, st.session_state.current_user, "assistant", answer
+                session, st.session_state.conversation_id, st.session_state.current_user, "assistant", displayed_answer
             )
         except Exception as exc:  # noqa: BLE001
             st.session_state.table_warning = f"Insertion assistant impossible ({exc})."
