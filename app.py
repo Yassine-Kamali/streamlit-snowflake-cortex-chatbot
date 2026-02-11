@@ -331,6 +331,15 @@ def start_new_chat(session, system_prompt: str, user_name: str) -> None:
             st.session_state.table_warning = f"Insertion en base impossible ({exc})."
 
 
+def refresh_user_conversations(session) -> None:
+    if st.session_state.table_warning:
+        return
+    try:
+        st.session_state.user_conversations = list_user_conversations(session, st.session_state.current_user)
+    except Exception:
+        st.session_state.user_conversations = []
+
+
 st.set_page_config(page_title="Chatbot Cortex - Snowflake", layout="wide")
 st.title("Chatbot Cortex dans Snowflake")
 
@@ -354,11 +363,7 @@ if not st.session_state.table_warning and not st.session_state.system_saved:
     except Exception as exc:  # noqa: BLE001
         st.session_state.table_warning = f"Insertion systeme impossible ({exc})."
 
-if not st.session_state.table_warning:
-    try:
-        st.session_state.user_conversations = list_user_conversations(session, st.session_state.current_user)
-    except Exception:
-        st.session_state.user_conversations = []
+refresh_user_conversations(session)
 
 with st.sidebar:
     st.subheader("Parametres")
@@ -386,6 +391,7 @@ with st.sidebar:
         cleaned = prompt_input.strip() or DEFAULT_SYSTEM_PROMPT
         st.session_state.system_prompt = cleaned
         start_new_chat(session, cleaned, st.session_state.current_user)
+        refresh_user_conversations(session)
         st.rerun()
 
     st.markdown("### Mes conversations")
@@ -427,6 +433,7 @@ with st.sidebar:
                     st.session_state.messages = loaded
                     st.session_state.system_prompt = loaded[0]["content"] if loaded[0]["role"] == "system" else DEFAULT_SYSTEM_PROMPT
                     st.session_state.system_saved = True
+                    refresh_user_conversations(session)
                     st.rerun()
                 else:
                     st.warning("Aucune conversation trouvee pour cet utilisateur.")
@@ -488,6 +495,7 @@ if user_prompt:
             insert_message(
                 session, st.session_state.conversation_id, st.session_state.current_user, "user", user_prompt
             )
+            refresh_user_conversations(session)
         except Exception as exc:  # noqa: BLE001
             st.session_state.table_warning = f"Insertion utilisateur impossible ({exc})."
 
@@ -508,5 +516,6 @@ if user_prompt:
             insert_message(
                 session, st.session_state.conversation_id, st.session_state.current_user, "assistant", displayed_answer
             )
+            refresh_user_conversations(session)
         except Exception as exc:  # noqa: BLE001
             st.session_state.table_warning = f"Insertion assistant impossible ({exc})."
