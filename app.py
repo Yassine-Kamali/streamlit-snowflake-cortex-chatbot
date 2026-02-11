@@ -517,5 +517,6 @@ if user_prompt:
                 session, st.session_state.conversation_id, st.session_state.current_user, "assistant", displayed_answer
             )
             refresh_user_conversations(session)
+            st.rerun()
         except Exception as exc:  # noqa: BLE001
             st.session_state.table_warning = f"Insertion assistant impossible ({exc})."
