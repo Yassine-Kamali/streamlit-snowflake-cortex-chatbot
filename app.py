@@ -10,7 +10,11 @@ from snowflake.snowpark.context import get_active_session
 
 DEFAULT_SYSTEM_PROMPT = "Tu es un assistant utile."
 HISTORY_TABLE = "CHAT_MESSAGES"
+RAG_DOCS_TABLE = "RAG_DOCUMENTS"
+RAG_CHUNKS_TABLE = "RAG_CHUNKS"
 CROSS_REGION_SQL = "ALTER ACCOUNT SET CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION';"
+RAG_EMBED_MODEL = "multilingual-e5-large"
+RAG_EMBED_DIMS = 1024
 
 FALLBACK_MODELS: List[str] = [
     "claude-4-sonnet",
@@ -61,6 +65,169 @@ def ensure_history_table(session) -> str:
         return ""
     except Exception as exc:  # noqa: BLE001
         return f"Table de persistance non disponible ({exc})."
+
+
+def ensure_rag_tables(session) -> str:
+    try:
+        session.sql(
+            f"""
+            CREATE TABLE IF NOT EXISTS {RAG_DOCS_TABLE} (
+                doc_id STRING,
+                user_name STRING,
+                doc_name STRING,
+                source_type STRING,
+                created_at TIMESTAMP_NTZ
+            )
+            """
+        ).collect()
+        session.sql(
+            f"""
+            CREATE TABLE IF NOT EXISTS {RAG_CHUNKS_TABLE} (
+                chunk_id STRING,
+                doc_id STRING,
+                user_name STRING,
+                chunk_index NUMBER,
+                chunk_text STRING,
+                embedding VECTOR(FLOAT, {RAG_EMBED_DIMS}),
+                created_at TIMESTAMP_NTZ
+            )
+            """
+        ).collect()
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        return f"Tables RAG indisponibles ({exc})."
+
+
+def split_text_into_chunks(text: str, chunk_size: int = 900, overlap: int = 150) -> List[str]:
+    clean = " ".join(text.split())
+    if not clean:
+        return []
+
+    chunks: List[str] = []
+    start = 0
+    text_len = len(clean)
+    step = max(chunk_size - overlap, 1)
+    while start < text_len:
+        end = min(start + chunk_size, text_len)
+        chunk = clean[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end == text_len:
+            break
+        start += step
+    return chunks
+
+
+def index_rag_document(
+    session,
+    user_name: str,
+    doc_name: str,
+    content: str,
+    source_type: str = "manual",
+    chunk_size: int = 900,
+    overlap: int = 150,
+) -> Tuple[bool, str]:
+    chunks = split_text_into_chunks(content, chunk_size=chunk_size, overlap=overlap)
+    if not chunks:
+        return False, "Le document est vide apres nettoyage."
+
+    doc_id = str(uuid4())
+    try:
+        session.sql(
+            f"""
+            INSERT INTO {RAG_DOCS_TABLE} (doc_id, user_name, doc_name, source_type, created_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP())
+            """,
+            params=[doc_id, user_name, doc_name, source_type],
+        ).collect()
+
+        for idx, chunk in enumerate(chunks, start=1):
+            session.sql(
+                f"""
+                INSERT INTO {RAG_CHUNKS_TABLE}
+                    (chunk_id, doc_id, user_name, chunk_index, chunk_text, embedding, created_at)
+                SELECT
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    SNOWFLAKE.CORTEX.AI_EMBED(?, ?),
+                    CURRENT_TIMESTAMP()
+                """,
+                params=[str(uuid4()), doc_id, user_name, idx, chunk, RAG_EMBED_MODEL, chunk],
+            ).collect()
+
+        return True, f"Document indexe ({len(chunks)} chunks)."
+    except Exception as exc:  # noqa: BLE001
+        return False, f"Indexation RAG impossible ({exc})."
+
+
+def retrieve_rag_chunks(
+    session, user_name: str, query: str, top_k: int = 3
+) -> Tuple[List[Dict[str, str]], str]:
+    if not query.strip():
+        return [], ""
+
+    try:
+        rows = session.sql(
+            f"""
+            WITH q AS (
+                SELECT SNOWFLAKE.CORTEX.AI_EMBED(?, ?) AS qvec
+            )
+            SELECT
+                c.chunk_text,
+                d.doc_name,
+                VECTOR_COSINE_SIMILARITY(c.embedding, q.qvec) AS score
+            FROM {RAG_CHUNKS_TABLE} c
+            JOIN {RAG_DOCS_TABLE} d ON c.doc_id = d.doc_id
+            CROSS JOIN q
+            WHERE c.user_name = ?
+            ORDER BY score DESC
+            LIMIT {int(top_k)}
+            """,
+            params=[RAG_EMBED_MODEL, query, user_name],
+        ).collect()
+
+        results: List[Dict[str, str]] = []
+        for row in rows:
+            row_data = row.as_dict()
+            doc_name = row_data.get("DOC_NAME") or row_data.get("doc_name")
+            chunk_text = row_data.get("CHUNK_TEXT") or row_data.get("chunk_text")
+            score = row_data.get("SCORE") or row_data.get("score")
+            results.append(
+                {
+                    "doc_name": str(doc_name or ""),
+                    "chunk_text": str(chunk_text or ""),
+                    "score": f"{float(score):.4f}" if score is not None else "0.0000",
+                }
+            )
+
+        return results, ""
+    except Exception as exc:  # noqa: BLE001
+        return [], f"Recherche RAG impossible ({exc})."
+
+
+def inject_rag_context(history: List[Dict[str, str]], rag_chunks: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    if not rag_chunks:
+        return history
+
+    context_lines = []
+    for idx, chunk in enumerate(rag_chunks, start=1):
+        context_lines.append(
+            f"[Source {idx}] {chunk['doc_name']} (score={chunk['score']}): {chunk['chunk_text']}"
+        )
+
+    rag_instruction = (
+        "Contexte documentaire RAG:\n"
+        + "\n\n".join(context_lines)
+        + "\n\nUtilise ce contexte en priorite. Si l'information manque, dis-le clairement."
+    )
+
+    if history and history[0]["role"] == "system":
+        return [history[0], {"role": "system", "content": rag_instruction}, *history[1:]]
+
+    return [{"role": "system", "content": rag_instruction}, *history]
 
 
 def get_current_user(session) -> str:
@@ -316,6 +483,12 @@ def init_state() -> None:
     if "selected_conversation_id" not in st.session_state:
         st.session_state.selected_conversation_id = ""
 
+    if "rag_warning" not in st.session_state:
+        st.session_state.rag_warning = ""
+
+    if "last_rag_sources" not in st.session_state:
+        st.session_state.last_rag_sources = []
+
 
 def start_new_chat(session, system_prompt: str, user_name: str) -> None:
     st.session_state.conversation_id = str(uuid4())
@@ -354,6 +527,8 @@ if st.session_state.models == FALLBACK_MODELS:
 
 if not st.session_state.table_warning:
     st.session_state.table_warning = ensure_history_table(session)
+if not st.session_state.rag_warning:
+    st.session_state.rag_warning = ensure_rag_tables(session)
 
 if not st.session_state.table_warning and not st.session_state.system_saved:
     try:
@@ -380,6 +555,36 @@ with st.sidebar:
     temperature = st.slider("Temperature", min_value=0.0, max_value=1.5, value=0.2, step=0.1)
     if temperature > 1.0:
         st.caption("Snowflake Cortex limite `temperature` a 1.0. La valeur envoyee sera 1.0.")
+
+    st.markdown("### Mini-RAG")
+    enable_rag = st.checkbox("Activer mini-RAG", value=False)
+    rag_top_k = st.slider("Top K RAG", min_value=1, max_value=8, value=3, step=1)
+    rag_doc_name = st.text_input("Nom du document", value="")
+    rag_file = st.file_uploader("Importer un fichier texte", type=["txt", "md"])
+    rag_text = st.text_area("Ou coller un texte a indexer", value="", height=120)
+    if st.button("Indexer document RAG"):
+        if st.session_state.rag_warning:
+            st.error(st.session_state.rag_warning)
+        else:
+            doc_name = rag_doc_name.strip() or (rag_file.name if rag_file is not None else "document")
+            file_text = ""
+            if rag_file is not None:
+                try:
+                    file_text = rag_file.getvalue().decode("utf-8", errors="ignore")
+                except Exception:
+                    file_text = ""
+            content_to_index = file_text.strip() or rag_text.strip()
+            ok, msg = index_rag_document(
+                session=session,
+                user_name=st.session_state.current_user,
+                doc_name=doc_name,
+                content=content_to_index,
+                source_type="file" if rag_file is not None else "manual",
+            )
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
 
     prompt_input = st.text_area(
         "Instruction systeme",
@@ -473,6 +678,8 @@ st.caption(
 
 if st.session_state.table_warning:
     st.warning(st.session_state.table_warning)
+if st.session_state.rag_warning:
+    st.warning(st.session_state.rag_warning)
 
 if len(st.session_state.messages) == 1:
     st.info("Posez votre premiere question dans la zone de saisie en bas.")
@@ -501,6 +708,18 @@ if user_prompt:
 
     with st.chat_message("assistant"):
         payload = build_full_history(st.session_state.messages)
+        rag_chunks: List[Dict[str, str]] = []
+        rag_runtime_warning = ""
+        if enable_rag and not st.session_state.rag_warning:
+            rag_chunks, rag_runtime_warning = retrieve_rag_chunks(
+                session=session,
+                user_name=st.session_state.current_user,
+                query=user_prompt,
+                top_k=rag_top_k,
+            )
+            if rag_chunks:
+                payload = inject_rag_context(payload, rag_chunks)
+
         with st.spinner("Generation en cours..."):
             try:
                 displayed_answer = call_cortex(session, selected_model, payload, temperature)
@@ -508,6 +727,16 @@ if user_prompt:
                 displayed_answer = format_cortex_exception(exc, selected_model)
 
         st.markdown(displayed_answer)
+        if rag_runtime_warning:
+            st.caption(rag_runtime_warning)
+        if enable_rag and rag_chunks:
+            with st.expander("Sources RAG utilisees"):
+                for idx, chunk in enumerate(rag_chunks, start=1):
+                    st.markdown(
+                        f"**{idx}. {chunk['doc_name']}** (score={chunk['score']})\n\n{chunk['chunk_text']}"
+                    )
+
+        st.session_state.last_rag_sources = rag_chunks
 
     st.session_state.messages.append({"role": "assistant", "content": displayed_answer})
 

@@ -21,14 +21,16 @@ Flux:
 |-- README.md
 `-- sql
     |-- 01_setup_environment.sql
-    `-- 02_create_conversation_table.sql
+    |-- 02_create_conversation_table.sql
+    `-- 03_rag_setup.sql
 ```
 
 ## Partie A - Mise en place Snowflake
 Executer:
 1. `sql/01_setup_environment.sql`
 2. `sql/02_create_conversation_table.sql`
-3. Dans `sql/01_setup_environment.sql`, remplacer `<YOUR_ROLE>` par votre role Snowflake existant.
+3. `sql/03_rag_setup.sql` (mini-RAG)
+4. Dans `sql/01_setup_environment.sql`, remplacer `<YOUR_ROLE>` par votre role Snowflake existant.
 
 Resultat attendu:
 - Warehouse: `WH_LAB`
@@ -85,6 +87,21 @@ Fonctionnalites implementees:
 - rechargement automatique d'une conversation depuis la liste `Mes conversations` (sans bouton `Charger`).
 - nom des conversations base sur le premier message utilisateur.
 - export de la conversation courante en JSON et CSV.
+
+## Bonus - Mini-RAG
+- Tables:
+  - `RAG_DOCUMENTS`
+  - `RAG_CHUNKS` (avec embeddings `VECTOR(FLOAT, 1024)`)
+- Indexation:
+  - import de texte (`.txt`/`.md`) ou collage manuel depuis la sidebar,
+  - decoupage en chunks,
+  - embedding avec `SNOWFLAKE.CORTEX.AI_EMBED('multilingual-e5-large', chunk)`.
+- Retrieval:
+  - embedding de la question utilisateur,
+  - recherche vectorielle via `VECTOR_COSINE_SIMILARITY`,
+  - injection du contexte top-k dans le prompt.
+- Transparence:
+  - affichage des sources RAG utilisees sous la reponse.
 
 ## Deploiement Streamlit in Snowflake
 1. Ouvrir Snowflake > **Projects** > **Streamlit** > **Create app**.
