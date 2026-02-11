@@ -1,6 +1,6 @@
 ﻿# Chatbot Streamlit + Snowflake Cortex
 
-Application web conversationnelle de type ChatGPT, hebergee dans **Streamlit in Snowflake**, utilisant **Snowflake Cortex** sans cle OpenAI.
+Application web conversationnelle de type ChatGPT, hebergee dans **Streamlit in Snowflake**, utilisant **Snowflake Cortex** .
 
 ## Architecture
 - Frontend: Streamlit (`app.py`) execute dans Snowflake.
@@ -21,14 +21,15 @@ Flux:
 |-- README.md
 `-- sql
     |-- 01_setup_environment.sql
-    `-- 02_create_conversation_table.sql
+    |-- 02_create_conversation_table.sql
+    |-- 03_rag_setup.sql
 ```
 
 ## Partie A - Mise en place Snowflake
 Executer:
 1. `sql/01_setup_environment.sql`
 2. `sql/02_create_conversation_table.sql`
-3. Dans `sql/01_setup_environment.sql`, remplacer `<YOUR_ROLE>` par votre role Snowflake existant.
+3. `sql/03_rag_setup.sql`
 
 Resultat attendu:
 - Warehouse: `WH_LAB`
@@ -85,6 +86,7 @@ Fonctionnalites implementees:
 - rechargement automatique d'une conversation depuis la liste `Mes conversations` (sans bouton `Charger`).
 - nom des conversations base sur le premier message utilisateur.
 - export de la conversation courante en JSON et CSV.
+- mini-RAG avec indexation de documents via l'icone `+` pres de la zone de message.
 
 ## Deploiement Streamlit in Snowflake
 1. Ouvrir Snowflake > **Projects** > **Streamlit** > **Create app**.
@@ -110,6 +112,16 @@ Valeurs possibles: `AWS_US`, `AWS_EU`, `AWS_APJ`, `ANY_REGION`.
 - Gestion taille historique:
   - envoi de tout l'historique de la conversation a chaque requete,
   - message `system` toujours conserve.
+
+## Mini-RAG (usage)
+- Activez `Activer mini-RAG` dans la sidebar.
+- Ajoutez un document via l'icone `+` a gauche de la zone de message.
+- Le titre est detecte automatiquement depuis le nom du fichier.
+- Le contenu est extrait automatiquement (txt/md/pdf), puis:
+  - chunking,
+  - embeddings avec `SNOWFLAKE.CORTEX.EMBED_TEXT_1024`,
+  - retrieval `top-k` par similarite cosinus.
+- Les sources utilisees sont affichees dans `Sources RAG utilisees`.
 
 
 ## Images

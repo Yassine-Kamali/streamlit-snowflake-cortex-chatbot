@@ -1,12 +1,19 @@
 ﻿import json
 import csv
 import io
+import hashlib
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from uuid import uuid4
 
 import streamlit as st
 from snowflake.snowpark.context import get_active_session
+
+try:
+    from pypdf import PdfReader
+except Exception:
+    PdfReader = None
 
 DEFAULT_SYSTEM_PROMPT = "Tu es un assistant utile."
 HISTORY_TABLE = "CHAT_MESSAGES"
@@ -118,6 +125,61 @@ def split_text_into_chunks(text: str, chunk_size: int = 900, overlap: int = 150)
     return chunks
 
 
+def extract_document_title_and_content(uploaded_file) -> Tuple[str, str, str]:
+    file_name = uploaded_file.name if uploaded_file is not None else "document"
+    title = Path(file_name).stem.replace("_", " ").strip() or "document"
+    raw = uploaded_file.getvalue() if uploaded_file is not None else b""
+    suffix = Path(file_name).suffix.lower()
+    warning = ""
+
+    text = ""
+    if suffix in {".txt", ".md", ".csv", ".json"}:
+        text = raw.decode("utf-8", errors="ignore")
+    elif suffix == ".pdf":
+        if PdfReader is None:
+            warning = "Lecture PDF limitee dans cet environnement. Preferer .txt/.md pour de meilleurs resultats."
+            text = raw.decode("utf-8", errors="ignore")
+        else:
+            try:
+                reader = PdfReader(io.BytesIO(raw))
+                text = "\n".join([(page.extract_text() or "") for page in reader.pages])
+            except Exception:
+                warning = "Extraction PDF partielle ou impossible. Preferer .txt/.md."
+                text = raw.decode("utf-8", errors="ignore")
+    else:
+        warning = "Format non optimal pour extraction texte. Preferer .txt/.md/.pdf."
+        text = raw.decode("utf-8", errors="ignore")
+
+    return title, text.strip(), warning
+
+
+def auto_index_uploaded_rag_file(session, user_name: str, uploaded_file) -> Tuple[bool, str]:
+    if uploaded_file is None:
+        return False, "Aucun fichier fourni."
+
+    raw = uploaded_file.getvalue()
+    file_sig = hashlib.sha256(raw).hexdigest()
+    if st.session_state.get("last_indexed_rag_file_sig") == file_sig:
+        return True, "Document deja indexe."
+
+    title, content, warning = extract_document_title_and_content(uploaded_file)
+    if not content:
+        return False, "Impossible d'extraire le contenu du document."
+
+    ok, msg = index_rag_document(
+        session=session,
+        user_name=user_name,
+        doc_name=title,
+        content=content,
+        source_type="file",
+    )
+    if ok:
+        st.session_state.last_indexed_rag_file_sig = file_sig
+        if warning:
+            msg = f"{msg} {warning}"
+    return ok, msg
+
+
 def index_rag_document(
     session,
     user_name: str,
@@ -152,7 +214,7 @@ def index_rag_document(
                     ?,
                     ?,
                     ?,
-                    SNOWFLAKE.CORTEX.AI_EMBED(?, ?),
+                    SNOWFLAKE.CORTEX.EMBED_TEXT_1024(?, ?),
                     CURRENT_TIMESTAMP()
                 """,
                 params=[str(uuid4()), doc_id, user_name, idx, chunk, RAG_EMBED_MODEL, chunk],
@@ -173,7 +235,7 @@ def retrieve_rag_chunks(
         rows = session.sql(
             f"""
             WITH q AS (
-                SELECT SNOWFLAKE.CORTEX.AI_EMBED(?, ?) AS qvec
+                SELECT SNOWFLAKE.CORTEX.EMBED_TEXT_1024(?, ?) AS qvec
             )
             SELECT
                 c.chunk_text,
@@ -225,9 +287,21 @@ def inject_rag_context(history: List[Dict[str, str]], rag_chunks: List[Dict[str,
     )
 
     if history and history[0]["role"] == "system":
-        return [history[0], {"role": "system", "content": rag_instruction}, *history[1:]]
+        merged_system = f"{history[0]['content']}\n\n{rag_instruction}"
+        return [{"role": "system", "content": merged_system}, *history[1:]]
 
     return [{"role": "system", "content": rag_instruction}, *history]
+
+
+def is_empty_model_answer(answer: str) -> bool:
+    normalized = " ".join(answer.strip().split())
+    if not normalized:
+        return True
+    if normalized in {"{}", "[]"}:
+        return True
+    if '"choices": [ {} ]' in normalized:
+        return True
+    return False
 
 
 def get_current_user(session) -> str:
@@ -489,6 +563,9 @@ def init_state() -> None:
     if "last_rag_sources" not in st.session_state:
         st.session_state.last_rag_sources = []
 
+    if "last_indexed_rag_file_sig" not in st.session_state:
+        st.session_state.last_indexed_rag_file_sig = ""
+
 
 def start_new_chat(session, system_prompt: str, user_name: str) -> None:
     st.session_state.conversation_id = str(uuid4())
@@ -559,32 +636,7 @@ with st.sidebar:
     st.markdown("### Mini-RAG")
     enable_rag = st.checkbox("Activer mini-RAG", value=False)
     rag_top_k = st.slider("Top K RAG", min_value=1, max_value=8, value=3, step=1)
-    rag_doc_name = st.text_input("Nom du document", value="")
-    rag_file = st.file_uploader("Importer un fichier texte", type=["txt", "md"])
-    rag_text = st.text_area("Ou coller un texte a indexer", value="", height=120)
-    if st.button("Indexer document RAG"):
-        if st.session_state.rag_warning:
-            st.error(st.session_state.rag_warning)
-        else:
-            doc_name = rag_doc_name.strip() or (rag_file.name if rag_file is not None else "document")
-            file_text = ""
-            if rag_file is not None:
-                try:
-                    file_text = rag_file.getvalue().decode("utf-8", errors="ignore")
-                except Exception:
-                    file_text = ""
-            content_to_index = file_text.strip() or rag_text.strip()
-            ok, msg = index_rag_document(
-                session=session,
-                user_name=st.session_state.current_user,
-                doc_name=doc_name,
-                content=content_to_index,
-                source_type="file" if rag_file is not None else "manual",
-            )
-            if ok:
-                st.success(msg)
-            else:
-                st.error(msg)
+    st.caption("Ajout de document: utilisez l'icone `+` pres de la zone de message.")
 
     prompt_input = st.text_area(
         "Instruction systeme",
@@ -690,7 +742,33 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-user_prompt = st.chat_input("Ecrivez votre message...")
+input_cols = st.columns([1, 12], vertical_alignment="bottom")
+with input_cols[0]:
+    with st.popover("➕"):
+        rag_inline_file = st.file_uploader(
+            "Ajouter un document (txt, md, pdf)",
+            type=["txt", "md", "pdf"],
+            key="rag_inline_file",
+        )
+        if rag_inline_file is not None:
+            if st.session_state.rag_warning:
+                st.error(st.session_state.rag_warning)
+            else:
+                ok, msg = auto_index_uploaded_rag_file(
+                    session=session,
+                    user_name=st.session_state.current_user,
+                    uploaded_file=rag_inline_file,
+                )
+                if ok:
+                    refresh_user_conversations(session)
+                    if msg != "Document deja indexe.":
+                        st.success(msg)
+                else:
+                    st.error(msg)
+
+with input_cols[1]:
+    user_prompt = st.chat_input("Ecrivez votre message...")
+
 if user_prompt:
     st.session_state.messages.append({"role": "user", "content": user_prompt})
 
@@ -707,7 +785,8 @@ if user_prompt:
             st.session_state.table_warning = f"Insertion utilisateur impossible ({exc})."
 
     with st.chat_message("assistant"):
-        payload = build_full_history(st.session_state.messages)
+        payload_without_rag = build_full_history(st.session_state.messages)
+        payload = payload_without_rag
         rag_chunks: List[Dict[str, str]] = []
         rag_runtime_warning = ""
         if enable_rag and not st.session_state.rag_warning:
@@ -725,6 +804,14 @@ if user_prompt:
                 displayed_answer = call_cortex(session, selected_model, payload, temperature)
             except Exception as exc:  # noqa: BLE001
                 displayed_answer = format_cortex_exception(exc, selected_model)
+
+        if enable_rag and rag_chunks and is_empty_model_answer(displayed_answer):
+            with st.spinner("Repli sans RAG (reponse vide)..."):
+                try:
+                    displayed_answer = call_cortex(session, selected_model, payload_without_rag, temperature)
+                    st.caption("Reponse vide avec RAG: repli automatique sans contexte RAG.")
+                except Exception as exc:  # noqa: BLE001
+                    displayed_answer = format_cortex_exception(exc, selected_model)
 
         st.markdown(displayed_answer)
         if rag_runtime_warning:
