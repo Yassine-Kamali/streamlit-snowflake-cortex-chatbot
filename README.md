@@ -112,32 +112,5 @@ Valeurs possibles: `AWS_US`, `AWS_EU`, `AWS_APJ`, `ANY_REGION`.
   - conservation des `N` derniers tours (user+assistant),
   - message `system` toujours conserve.
 
-## Reponses aux questions de validation
-1. **Quel modele Cortex avez-vous utilise et pourquoi ?**
-J'ai utilise `claude-3-5-sonnet` par defaut pour un bon compromis qualite/cout/latence, avec possibilite de changer le modele dans la sidebar.
 
-2. **Comment gerez-vous la taille de l'historique ?**
-L'app tronque l'historique au nombre de tours choisi dans la sidebar. Cela limite les tokens et stabilise les temps de reponse.
 
-3. **Comment avez-vous construit le prompt ?**
-Le prompt est une liste de messages structures (`system`, puis `user/assistant`) envoyee en JSON a `SNOWFLAKE.CORTEX.TRY_COMPLETE`.
-
-4. **Quelles difficultes techniques avez-vous rencontrees ?**
-Les principales difficultes sont les privileges Cortex/Streamlit et la robustesse de parsing des reponses selon le format retourne par le modele.
-
-5. **Comment garantir la confidentialite des conversations stockees ?**
-- Limiter les roles ayant `SELECT` sur la table.
-- Isoler les donnees par schema/role.
-- Eviter de stocker des donnees sensibles non necessaires.
-- Appliquer les politiques de securite Snowflake (RBAC, audit, masquage si besoin).
-
-## Livrables a fournir
-- Lien de l'application deployee (a renseigner).
-- Capture d'ecran de l'app fonctionnelle (a ajouter dans le repo).
-- Repository GitHub public contenant ce code et cette documentation.
-- Envoi du lien GitHub a `axel@logbrain.fr`.
-
-## Commandes utiles de verification
-```bash
-python -m py_compile app.py
-```
