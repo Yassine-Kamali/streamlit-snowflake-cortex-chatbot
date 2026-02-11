@@ -336,7 +336,6 @@ def start_new_chat(session, system_prompt: str, user_name: str) -> None:
 
 st.set_page_config(page_title="Chatbot Cortex - Snowflake", layout="wide")
 st.title("Chatbot Cortex dans Snowflake")
-st.write("Application Streamlit in Snowflake connectee a Snowflake Cortex (sans cle OpenAI).")
 
 session = get_active_session()
 init_state()
