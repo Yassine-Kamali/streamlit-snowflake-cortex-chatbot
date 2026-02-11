@@ -169,15 +169,12 @@ def load_conversation(session, conversation_id: str, user_name: str) -> List[Dic
     return messages
 
 
-def trim_history(messages: List[Dict[str, str]], max_turns: int) -> List[Dict[str, str]]:
+def build_full_history(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
     system_messages = [msg for msg in messages if msg["role"] == "system"]
     dialogue = [msg for msg in messages if msg["role"] in {"user", "assistant"}]
-    keep = max_turns * 2
-    trimmed_dialogue = dialogue[-keep:]
-
     if system_messages:
-        return [system_messages[0], *trimmed_dialogue]
-    return trimmed_dialogue
+        return [system_messages[0], *dialogue]
+    return dialogue
 
 
 def conversation_export_payload(messages: List[Dict[str, str]], conversation_id: str, user_name: str) -> str:
@@ -376,7 +373,6 @@ with st.sidebar:
 
     selected_model = st.selectbox("Modele Cortex", model_list, index=default_index)
     temperature = st.slider("Temperature", min_value=0.0, max_value=1.5, value=0.2, step=0.1)
-    max_turns = st.slider("Tours d'historique conserves", min_value=2, max_value=30, value=12, step=1)
     if temperature > 1.0:
         st.caption("Snowflake Cortex limite `temperature` a 1.0. La valeur envoyee sera 1.0.")
 
@@ -496,7 +492,7 @@ if user_prompt:
             st.session_state.table_warning = f"Insertion utilisateur impossible ({exc})."
 
     with st.chat_message("assistant"):
-        payload = trim_history(st.session_state.messages, max_turns)
+        payload = build_full_history(st.session_state.messages)
         with st.spinner("Generation en cours..."):
             try:
                 displayed_answer = call_cortex(session, selected_model, payload, temperature)
