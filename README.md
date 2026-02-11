@@ -35,7 +35,6 @@ Resultat attendu:
 - Warehouse: `WH_LAB`
 - Database: `DB_LAB`
 - Schema: `CHAT_APP`
-- Role: un role existant (`<YOUR_ROLE>`)
 - Table: `CHAT_MESSAGES`
 - Cross-region Cortex active: `CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION'`
 
