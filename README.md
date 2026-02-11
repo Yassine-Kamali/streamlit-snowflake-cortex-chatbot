@@ -54,7 +54,7 @@ L'interface implemente:
 ## Partie C - Integration Cortex
 - Prompt construit a partir de:
   - instruction systeme,
-  - historique tronque de la conversation.
+  - historique complet de la conversation.
 - Appel LLM via Snowflake uniquement:
 
 ```sql
@@ -68,7 +68,7 @@ SELECT SNOWFLAKE.CORTEX.TRY_COMPLETE(
 - Parametres transmis:
   - modele selectionne,
   - temperature,
-  - historique complet (apres troncature).
+  - historique complet.
 
 ## Partie D - Persistance
 Schema conforme au sujet:
@@ -108,8 +108,7 @@ Valeurs possibles: `AWS_US`, `AWS_EU`, `AWS_APJ`, `ANY_REGION`.
   - tentative de lecture dynamique depuis `SNOWFLAKE.MODELS`,
   - fallback sur une liste de modeles Cortex connus.
 - Gestion taille historique:
-  - slider `Tours d'historique conserves`,
-  - conservation des `N` derniers tours (user+assistant),
+  - envoi de tout l'historique de la conversation a chaque requete,
   - message `system` toujours conserve.
 
 
