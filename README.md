@@ -114,4 +114,4 @@ Valeurs possibles: `AWS_US`, `AWS_EU`, `AWS_APJ`, `ANY_REGION`.
 
 
 ##Images
-![image](Images\image.png)
+![Alt text](Images/image.png)
